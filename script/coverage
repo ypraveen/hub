@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+export HUB_COVERAGE="$PWD/tmp/cover.out"
+
+if !git diff --quiet; then
+  echo "Error: please commit your changes before continuing." >&2
+  exit 1
+fi
+
+files=( `script/build files | grep -v _test.go | grep -v coverage.go` )
+n=0
+for f in "${files[@]}"; do
+  go tool cover -mode=set -var="LiveCoverage$((++n))" "$f" > "$f"~
+  sed -E '
+    /^package /a\
+    import "github.com/github/hub/coverage"
+    s/(LiveCoverage[0-9]+)\.Count\[([0-9]+)\].+$/coverage.Record(\1, \2)/
+  ' < "$f"~ > "$f"
+  rm "$f"~
+done
+
+rm -rf "$HUB_COVERAGE"
+mkdir -p "${HUB_COVERAGE%/*}"
+
+make test || true
+cucumber -p default || true
+
+git checkout -- "${files[@]}"
+
+echo 'mode: count' > "$HUB_COVERAGE"~
+sed -E 's!^.+/(github.com/github/hub/)!\1!' "$HUB_COVERAGE" | awk '
+  { a[substr($0, 0, length()-2)] += $(NF) }
+  END { for (k in a) print k, a[k] }
+' >> "$HUB_COVERAGE"~
+
+go tool cover -func="$HUB_COVERAGE"~ > "${HUB_COVERAGE%.out}.func"
+go tool cover -html="$HUB_COVERAGE"~ -o "${HUB_COVERAGE%.out}.html"
+
+tail -1 "${HUB_COVERAGE%.out}.func" | awk '{ print $(NF) }'
